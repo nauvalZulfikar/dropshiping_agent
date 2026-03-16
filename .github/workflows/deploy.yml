@@ -1,0 +1,44 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_KEY }}
+          script: |
+            # Install Docker if not exists
+            if ! command -v docker &> /dev/null; then
+              curl -fsSL https://get.docker.com | sh
+              apt-get install -y docker-compose-plugin
+            fi
+
+            # Clone or pull latest code
+            if [ -d "/root/dropship_agent" ]; then
+              cd /root/dropship_agent
+              git pull origin main
+            else
+              git clone https://github.com/nauvalZulfikar/dropshiping_agent.git /root/dropship_agent
+              cd /root/dropship_agent
+            fi
+
+            # Create .env if not exists
+            if [ ! -f "/root/dropship_agent/.env" ]; then
+              cp /root/dropship_agent/.env.example /root/dropship_agent/.env
+            fi
+
+            # Build and restart containers
+            cd /root/dropship_agent
+            docker compose down
+            docker compose up --build -d
+
+            # Show status
+            docker compose ps
