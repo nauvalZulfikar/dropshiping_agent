@@ -35,10 +35,19 @@ jobs:
               cp /root/dropship_agent/.env.example /root/dropship_agent/.env
             fi
 
+            # Open firewall ports
+            ufw allow 22 || true
+            ufw allow 80 || true
+            ufw allow 3000 || true
+            ufw allow 8000 || true
+            ufw --force enable || true
+
             # Build and restart containers
             cd /root/dropship_agent
             docker compose down
             docker compose up --build -d
 
             # Show status
+            sleep 10
             docker compose ps
+            docker compose logs --tail=20
