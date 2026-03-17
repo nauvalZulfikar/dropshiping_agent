@@ -56,6 +56,8 @@ services:
   celery_worker:
     build: ./backend
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       redis:
         condition: service_healthy
@@ -66,6 +68,8 @@ services:
   celery_beat:
     build: ./backend
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       redis:
         condition: service_healthy
@@ -77,6 +81,8 @@ services:
     build: ./backend
     ports: ["5555:5555"]
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       redis:
         condition: service_healthy
