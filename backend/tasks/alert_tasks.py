@@ -36,7 +36,7 @@ async def _daily_digest_async():
     import asyncpg
     from config import settings
 
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         rows = await conn.fetch("""
             SELECT pl.title, pl.platform, pl.price_idr, pl.url,
@@ -78,7 +78,7 @@ async def _watchlist_alerts_async():
     import asyncpg
     from config import settings
 
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         rows = await conn.fetch("""
             SELECT

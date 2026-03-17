@@ -61,7 +61,7 @@ async def _score_all_async() -> dict:
     from config import settings
     from engines.opportunity_scorer import compute_opportunity_score
 
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         rows = await conn.fetch("""
             SELECT pl.id
@@ -98,7 +98,7 @@ async def _embed_images_async() -> dict:
     from config import settings
     from engines.supplier_matcher import store_product_embedding
 
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         rows = await conn.fetch("""
             SELECT id, canonical_image_url
@@ -115,7 +115,7 @@ async def _embed_images_async() -> dict:
     failed = 0
     for row in rows:
         try:
-            conn2 = await asyncpg.connect(settings.database_url)
+            conn2 = await asyncpg.connect(settings.asyncpg_url)
             try:
                 await store_product_embedding(conn2, str(row["id"]), row["canonical_image_url"])
                 embedded += 1
@@ -138,7 +138,7 @@ async def _match_suppliers_async() -> dict:
     from config import settings
     from engines.supplier_matcher import embed_and_match_new_product
 
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         # Find products that have embeddings but unlinked suppliers with images
         products = await conn.fetch("""

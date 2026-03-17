@@ -41,6 +41,18 @@ class Settings(BaseSettings):
         extra = "ignore"
 
     @property
+    def asyncpg_url(self) -> str:
+        """Plain postgresql:// URL for asyncpg direct connections."""
+        return self.database_url.replace("postgresql+asyncpg://", "postgresql://")
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        """postgresql+asyncpg:// URL for SQLAlchemy async engine."""
+        if self.database_url.startswith("postgresql://"):
+            return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return self.database_url
+
+    @property
     def proxy_list_parsed(self) -> list[dict]:
         """Parse PROXY_LIST env var into list of proxy dicts."""
         if not self.proxy_list:

@@ -201,7 +201,7 @@ async def _cache_set(key: str, value: str, ttl: int = _CACHE_TTL_SECONDS):
 async def _save_trend_signal(keyword: str, score: int):
     """Persist a trend data point to trend_signals table."""
     try:
-        conn = await asyncpg.connect(settings.database_url)
+        conn = await asyncpg.connect(settings.asyncpg_url)
         await conn.execute("""
             INSERT INTO trend_signals (keyword, platform, trend_value, geo)
             VALUES ($1, 'google', $2, $3)

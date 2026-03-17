@@ -142,7 +142,7 @@ async def _monitor_price_changes_async() -> dict:
     from scrapers.shopee import ShopeeScraper
 
     # Use a pool so we don't reconnect for every single row update
-    pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=3)
+    pool = await asyncpg.create_pool(settings.asyncpg_url, min_size=1, max_size=3)
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -219,7 +219,7 @@ async def _log_job_start(source: str, job_type: str) -> str:
     """Insert a scraper_jobs row and return its string ID."""
     try:
         import asyncpg
-        conn = await asyncpg.connect(settings.database_url)
+        conn = await asyncpg.connect(settings.asyncpg_url)
         try:
             row = await conn.fetchrow("""
                 INSERT INTO scraper_jobs (source, job_type, status, started_at)
@@ -238,7 +238,7 @@ async def _log_job_done(job_id: str, status: str, items_scraped: int = 0, error:
     """Update a scraper_jobs row with completion status."""
     try:
         import asyncpg
-        conn = await asyncpg.connect(settings.database_url)
+        conn = await asyncpg.connect(settings.asyncpg_url)
         try:
             await conn.execute("""
                 UPDATE scraper_jobs

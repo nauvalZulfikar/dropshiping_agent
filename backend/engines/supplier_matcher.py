@@ -140,7 +140,7 @@ async def embed_and_match_new_product(product_id: str, image_url: str):
     Full pipeline: embed a new product's image then find matching suppliers.
     Called from Celery task after new product saved.
     """
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await asyncpg.connect(settings.asyncpg_url)
     try:
         await store_product_embedding(conn, product_id, image_url)
         matches = await match_supplier_to_product(conn, product_id, top_k=3)
