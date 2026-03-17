@@ -1,6 +1,19 @@
 version: '3.9'
 services:
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dropship
+      POSTGRES_PASSWORD: dropship123
+      POSTGRES_DB: dropship_db
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dropship -d dropship_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
@@ -18,6 +31,8 @@ services:
     env_file: .env
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     volumes: ["./backend:/app"]
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -70,3 +85,4 @@ services:
 
 volumes:
   redis_data:
+  postgres_data:
