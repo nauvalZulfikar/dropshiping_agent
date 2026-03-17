@@ -27,15 +27,11 @@ pytrends==4.9.2
 
 # AI / ML
 scikit-learn==1.4.2
-sentence-transformers==3.0.1
 numpy==1.26.4
 Pillow==10.3.0
 
 # Telegram
 python-telegram-bot==21.3
-
-# Time series
-prophet==1.1.5
 
 # Caching
 fastapi-cache2==0.2.1
