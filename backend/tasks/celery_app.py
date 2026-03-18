@@ -28,11 +28,14 @@ celery_app.conf.beat_schedule = {
         "task": "tasks.scrape_tasks.full_scan",
         "schedule": crontab(minute=0),
         "args": [[
-            "tas wanita", "sepatu pria", "skincare", "aksesoris hp",
-            "mainan anak", "peralatan dapur", "jam tangan murah", "kaos polos",
-            "lampu aesthetic", "totebag", "dompet pria", "baju anak",
-            "celana jogger", "hijab", "kacamata", "charger hp",
-            "kipas angin mini", "cermin aesthetic", "tempat makan", "alat olahraga"
+            "serum wajah", "sunscreen", "lip tint", "skincare bundling",
+            "kaos oversized", "hijab", "gamis", "tas wanita",
+            "casing hp", "earphone wireless", "powerbank", "tripod hp",
+            "kopi lokal", "snack viral", "bumbu masak", "keripik",
+            "organizer rumah", "alat dapur", "dekorasi rumah",
+            "vitamin c", "multivitamin", "suplemen kesehatan",
+            "popok bayi", "mpasi", "susu formula",
+            "kursus online", "template desain"
         ]],
     },
     "score-all-2h": {
