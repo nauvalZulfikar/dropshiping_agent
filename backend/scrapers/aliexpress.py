@@ -65,7 +65,7 @@ class AliExpressScraper(BaseScraper):
     async def scrape_product(self, url: str) -> dict:
         """Scrape AliExpress product detail page."""
         rate = await fetch_usd_to_idr_rate()
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(2.0, 4.0)
             content = await page.content()
@@ -80,7 +80,7 @@ class AliExpressScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def _scrape_search_page(self, url: str, rate: float, max_results: int) -> list[dict]:
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(2.0, 5.0)
 

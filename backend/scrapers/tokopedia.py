@@ -59,7 +59,7 @@ class TokopediaScraper(BaseScraper):
 
     async def scrape_product(self, url: str) -> dict:
         """Scrape full product detail page. Returns product dict."""
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(2.0, 4.0)
             content = await page.content()
@@ -75,7 +75,7 @@ class TokopediaScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def _scrape_search_page(self, url: str) -> list[dict]:
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(_MIN_DELAY, _MIN_DELAY + 1.5)
 

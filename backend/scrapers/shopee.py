@@ -53,7 +53,7 @@ class ShopeeScraper(BaseScraper):
 
     async def scrape_product(self, url: str) -> dict:
         """Scrape full Shopee product detail."""
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(2.0, 5.0)
             content = await page.content()
@@ -68,7 +68,7 @@ class ShopeeScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def _scrape_search_page(self, url: str) -> list[dict]:
-        page = await self._get_page(url, wait_until="networkidle")
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             await self._random_delay(2.0, 5.0)
 
