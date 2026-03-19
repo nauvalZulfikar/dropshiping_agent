@@ -79,10 +79,11 @@ class BaseScraper(ABC):
             self._browser = await self._playwright.chromium.launch(**launch_kwargs)
         return self._browser
 
-    async def _new_context_with_proxy(self) -> "BrowserContext":
+    async def _new_context_with_proxy(self, proxy: Optional[dict] = None) -> "BrowserContext":
         """Create context with proxy auth at context level (fixes 407 on HTTPS tunnels)."""
         browser = await self._get_browser()
-        proxy = self.proxy_manager.get_proxy()
+        if proxy is None:
+            proxy = self.proxy_manager.get_proxy()
         ua = random.choice(self.USER_AGENTS)
         vp = random.choice(self.VIEWPORT_SIZES)
 
@@ -132,27 +133,36 @@ class BaseScraper(ABC):
     async def _get_page(self, url: str, wait_until: str = "domcontentloaded") -> Page:
         """
         Open a new page, navigate to URL, apply stealth.
-        Rotates proxy per context. Uses random UA + viewport.
+        Rotates proxy per context. Retries up to 3 times on tunnel failures.
         """
-        context = await self._new_context_with_proxy()
-        page = await context.new_page()
+        last_exc = None
+        for attempt in range(3):
+            proxy = self.proxy_manager.get_proxy()
+            context = await self._new_context_with_proxy(proxy)
+            page = await context.new_page()
 
-        # Apply stealth to the actual page
-        try:
-            from playwright_stealth import stealth_async
-            await stealth_async(page)
-        except ImportError:
-            pass
+            try:
+                from playwright_stealth import stealth_async
+                await stealth_async(page)
+            except ImportError:
+                pass
 
-        try:
-            await page.goto(url, wait_until=wait_until, timeout=120_000)
-        except Exception as exc:
-            logger.warning(f"Navigation to {url} failed: {exc}")
-            await page.close()
-            await context.close()
-            raise
+            try:
+                await page.goto(url, wait_until=wait_until, timeout=120_000)
+                return page
+            except Exception as exc:
+                err_str = str(exc)
+                await page.close()
+                await context.close()
+                if "ERR_TUNNEL_CONNECTION_FAILED" in err_str and proxy:
+                    self.proxy_manager.mark_failed(proxy)
+                    logger.warning(f"Tunnel failed on attempt {attempt + 1}, rotating proxy")
+                    last_exc = exc
+                    continue
+                logger.warning(f"Navigation to {url} failed: {exc}")
+                raise
 
-        return page
+        raise last_exc
 
     async def close(self):
         if self._browser:
