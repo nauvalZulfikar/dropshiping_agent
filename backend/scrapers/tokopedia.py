@@ -1,15 +1,13 @@
 """
-Tokopedia scraper — uses GraphQL API via httpx (no browser needed).
-Falls back to Playwright only for product detail pages.
+Tokopedia scraper using Playwright with Indonesia proxy.
+Uses domcontentloaded (not networkidle) and 120s timeout for slow proxy connections.
 """
 import asyncio
 import re
-import random
 from typing import Optional
 from urllib.parse import quote
 
 import asyncpg
-import httpx
 
 from scrapers.base_scraper import BaseScraper
 from utils.currency import parse_idr_string, parse_sold_count
@@ -17,15 +15,12 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_GQL_URL = "https://gql.tokopedia.com/"
-_SEARCH_API = "https://ace.tokopedia.com/search/v4.6/product"
-_MIN_DELAY = 2.0
+_MIN_DELAY = 3.0
 
 
 class TokopediaScraper(BaseScraper):
-    """Scrapes Tokopedia via GraphQL API — fast, no browser overhead."""
 
-    SEARCH_URL = "https://www.tokopedia.com/search?st=product&q={keyword}&page={page}"
+    SEARCH_URL = "https://www.tokopedia.com/search?st=product&q={keyword}&navsource=home&srp_component_id=02.01.00.00&page={page}"
 
     def __init__(self):
         super().__init__()
@@ -33,95 +28,111 @@ class TokopediaScraper(BaseScraper):
     async def scrape_search(self, keyword: str, max_pages: int = 3) -> list[dict]:
         results: list[dict] = []
         for page_num in range(1, max_pages + 1):
+            url = self.SEARCH_URL.format(keyword=quote(keyword), page=page_num)
+            logger.info(f"[Tokopedia] Scraping page {page_num}: {url}")
             try:
-                products = await self._gql_search(keyword, page_num)
-                results.extend(products)
-                logger.info(f"[Tokopedia] Page {page_num}: {len(products)} products")
-                if not products:
+                page_results = await self._scrape_search_page(url)
+                results.extend(page_results)
+                logger.info(f"[Tokopedia] Page {page_num}: {len(page_results)} products")
+                if not page_results:
                     break
-                await asyncio.sleep(random.uniform(_MIN_DELAY, _MIN_DELAY + 2))
+                await asyncio.sleep(_MIN_DELAY)
             except Exception as exc:
                 logger.error(f"[Tokopedia] Page {page_num} failed: {exc}")
                 break
+        await self.close()
         return results
 
     async def scrape_product(self, url: str) -> dict:
-        """Fallback to Playwright for product detail."""
         page = await self._get_page(url, wait_until="domcontentloaded")
         try:
             return await self._extract_product_detail(page, url)
         finally:
             await page.context.close()
 
-    async def _gql_search(self, keyword: str, page: int) -> list[dict]:
-        """Query Tokopedia ACE search API via httpx."""
-        proxy = self.proxy_manager.get_proxy()
-        proxy_url = None
-        if proxy:
-            proxy_url = f"http://{proxy['user']}:{proxy['password']}@{proxy['host']}:{proxy['port']}"
-
-        headers = {
-            "User-Agent": random.choice(self.USER_AGENTS),
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "id-ID,id;q=0.9",
-            "Referer": f"https://www.tokopedia.com/search?q={quote(keyword)}",
-            "Origin": "https://www.tokopedia.com",
-        }
-
-        params = {
-            "q": keyword,
-            "ob": "23",
-            "page": str(page),
-            "rows": "60",
-            "source": "search",
-            "device": "desktop",
-            "related": "true",
-            "st": "product",
-            "safe_search": "false",
-        }
-
+    async def _scrape_search_page(self, url: str) -> list[dict]:
+        page = await self._get_page(url, wait_until="domcontentloaded")
         try:
-            client_kwargs = {"timeout": 30.0, "follow_redirects": True}
-            if proxy_url:
-                client_kwargs["proxy"] = proxy_url
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                resp = await client.get(_SEARCH_API, params=params, headers=headers)
-                logger.info(f"[Tokopedia] ACE status={resp.status_code}")
-                resp.raise_for_status()
-                data = resp.json()
+            await self._random_delay(_MIN_DELAY, _MIN_DELAY + 2)
+            content = await page.content()
+            if self._detect_captcha(content):
+                logger.warning("[Tokopedia] CAPTCHA detected")
+                return []
 
-            products_raw = data.get("data", []) or []
-            return [self._parse_ace_product(p) for p in products_raw if p.get("name")]
+            # Wait for product cards
+            try:
+                await page.wait_for_selector('[data-testid="master-product-card"]', timeout=20_000)
+            except Exception:
+                try:
+                    await page.wait_for_selector(".css-bk6tzz", timeout=10_000)
+                except Exception:
+                    logger.warning("[Tokopedia] No product cards found")
+                    return []
 
+            await self._human_scroll(page)
+            return await self._extract_search_cards(page)
+        finally:
+            await page.context.close()
+
+    async def _extract_search_cards(self, page) -> list[dict]:
+        cards = await page.query_selector_all('[data-testid="master-product-card"]')
+        if not cards:
+            cards = await page.query_selector_all(".css-bk6tzz")
+        products = []
+        for card in cards:
+            try:
+                product = await self._parse_card(card)
+                if product:
+                    products.append(product)
+            except Exception as exc:
+                logger.debug(f"[Tokopedia] Card parse error: {exc}")
+        return products
+
+    async def _parse_card(self, card) -> Optional[dict]:
+        try:
+            title_el = await card.query_selector('[data-testid="spnSRPProdName"]')
+            title = (await title_el.text_content()).strip() if title_el else ""
+            if not title:
+                return None
+            price_el = await card.query_selector('[data-testid="spnSRPProdPrice"]')
+            price_raw = (await price_el.text_content()).strip() if price_el else "0"
+            price_idr = parse_idr_string(price_raw)
+            shop_el = await card.query_selector('[data-testid="spnSRPProdTabName"]')
+            seller_name = (await shop_el.text_content()).strip() if shop_el else ""
+            location_el = await card.query_selector('[data-testid="spnSRPProdTabArea"]')
+            seller_city = (await location_el.text_content()).strip() if location_el else ""
+            rating_el = await card.query_selector('[data-testid="spnSRPProdRating"]')
+            rating_raw = (await rating_el.text_content()).strip() if rating_el else ""
+            rating = _parse_rating(rating_raw)
+            review_el = await card.query_selector('[data-testid="spnSRPProdReviewTotal"]')
+            review_raw = (await review_el.text_content()).strip() if review_el else "0"
+            review_count = _parse_review_count(review_raw)
+            sold_el = await card.query_selector('[data-testid="spnSRPProdSold"]')
+            sold_raw = (await sold_el.text_content()).strip() if sold_el else "0"
+            sold_30d = parse_sold_count(sold_raw)
+            img_el = await card.query_selector("img")
+            image_url = await img_el.get_attribute("src") if img_el else ""
+            link_el = await card.query_selector("a")
+            product_url = await link_el.get_attribute("href") if link_el else ""
+            if product_url and product_url.startswith("/"):
+                product_url = f"https://www.tokopedia.com{product_url}"
+            return {
+                "platform": "tokopedia",
+                "title": title,
+                "price_idr": price_idr,
+                "seller_name": seller_name,
+                "seller_city": seller_city,
+                "rating": rating,
+                "review_count": review_count,
+                "sold_30d": sold_30d,
+                "sold_count": sold_30d,
+                "image_url": image_url,
+                "url": product_url,
+                "seller_badge": "",
+            }
         except Exception as exc:
-            logger.error(f"[Tokopedia] ACE error: {exc}")
-            return []
-
-    def _parse_ace_product(self, p: dict) -> dict:
-        price_idr = int(p.get("price", 0) or 0)
-        sold_raw = p.get("sold", "") or p.get("countReview", "") or ""
-        sold_30d = parse_sold_count(str(sold_raw))
-        try:
-            rating = float(p.get("ratingAverage", 0) or 0)
-            rating = rating if 0 < rating <= 5 else None
-        except (ValueError, TypeError):
-            rating = None
-        shop = p.get("shop", {}) or {}
-        return {
-            "platform": "tokopedia",
-            "platform_product_id": str(p.get("id", "")),
-            "title": p.get("name", ""),
-            "url": p.get("url", ""),
-            "image_url": p.get("imageUrl", ""),
-            "price_idr": price_idr,
-            "sold_count": sold_30d,
-            "sold_30d": sold_30d,
-            "review_count": int(p.get("countReview", 0) or 0),
-            "rating": rating,
-            "seller_name": shop.get("name", ""),
-            "seller_city": shop.get("city", ""),
-            "seller_badge": "",
-        }
+            logger.debug(f"[Tokopedia] Card parse exception: {exc}")
+            return None
 
     async def _extract_product_detail(self, page, url: str) -> dict:
         title = await self._safe_text(page, 'h1[data-testid="lblPDPDetailProductName"]')
@@ -138,10 +149,9 @@ class TokopediaScraper(BaseScraper):
         seller_name = await self._safe_text(page, '[data-testid="llbPDPFooterShopName"]')
         seller_city = await self._safe_text(page, '[data-testid="llbPDPFooterShopLocation"]')
         img_url = await self._safe_attr(page, '[data-testid="PDPMainImage"] img', "src")
-        platform_product_id = _extract_tokopedia_product_id(url)
         return {
             "platform": "tokopedia",
-            "platform_product_id": platform_product_id,
+            "platform_product_id": _extract_tokopedia_product_id(url),
             "title": title,
             "url": url,
             "image_url": img_url,
@@ -162,9 +172,7 @@ class TokopediaScraper(BaseScraper):
 async def save_listings_to_db(db_url: str, listings: list[dict], job_id: str | None = None) -> int:
     if not listings:
         return 0
-
     from engines.deduplicator import find_or_create_canonical_product_simple
-
     conn = await asyncpg.connect(db_url)
     try:
         saved = 0
@@ -212,7 +220,7 @@ async def save_listings_to_db(db_url: str, listings: list[dict], job_id: str | N
                 )
                 saved += 1
             except Exception as exc:
-                logger.warning(f"[Tokopedia] DB save error for '{item.get('title', '')[:40]}': {exc}")
+                logger.warning(f"[Tokopedia] DB save error: {exc}")
         return saved
     finally:
         await conn.close()
