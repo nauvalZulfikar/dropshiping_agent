@@ -78,6 +78,7 @@ class BaseScraper(ABC):
                 ],
             }
             self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        return self._browser
 
     async def _new_context_with_proxy(self) -> "BrowserContext":
         """Create context with proxy auth at context level (fixes 407 on HTTPS tunnels)."""
