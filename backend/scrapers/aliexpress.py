@@ -84,10 +84,19 @@ class AliExpressScraper(BaseScraper):
         try:
             await self._random_delay(2.0, 5.0)
 
-            content = await page.content()
-            if self._detect_captcha(content):
-                await page.context.close()
-                raise CaptchaError("CAPTCHA on search page")
+            # Only treat as CAPTCHA if no product cards found AND captcha indicators present
+            # AliExpress embeds "captcha" in JS even on normal pages — check cards first
+            try:
+                await page.wait_for_selector(".search-item-card-wrapper-gallery", timeout=8_000)
+                has_cards = True
+            except Exception:
+                has_cards = False
+
+            if not has_cards:
+                content = await page.content()
+                if self._detect_captcha(content):
+                    await page.context.close()
+                    raise CaptchaError("CAPTCHA on search page")
 
             # Try JSON embedded data first (faster)
             products = await self._try_extract_json(page, rate)
@@ -130,11 +139,6 @@ class AliExpressScraper(BaseScraper):
 
     async def _extract_dom(self, page, rate: float) -> list[dict]:
         """DOM-based fallback extraction for AliExpress search cards."""
-        try:
-            await page.wait_for_selector(".search-item-card-wrapper-gallery", timeout=15_000)
-        except Exception:
-            return []
-
         cards = await page.query_selector_all(".search-item-card-wrapper-gallery")
         results = []
         for card in cards:
