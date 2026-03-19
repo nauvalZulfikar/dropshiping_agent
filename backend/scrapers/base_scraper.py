@@ -99,6 +99,8 @@ class BaseScraper(ABC):
         if proxy:
             context_kwargs["proxy"] = {
                 "server": f"http://{proxy['host']}:{proxy['port']}",
+            }
+            context_kwargs["http_credentials"] = {
                 "username": proxy.get("user", ""),
                 "password": proxy.get("password", ""),
             }
