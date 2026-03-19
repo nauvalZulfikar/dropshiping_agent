@@ -5,7 +5,6 @@ Falls back to direct connection if no proxies configured.
 """
 import time
 import threading
-import logging
 from collections import deque
 from typing import Optional
 
@@ -14,7 +13,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_FAILED_COOLDOWN_SECONDS = 600  # 10 minutes
+_FAILED_COOLDOWN_SECONDS = 60  # 1 minute — tunnel failures are transient
 
 
 class ProxyManager:

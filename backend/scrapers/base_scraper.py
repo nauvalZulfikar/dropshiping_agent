@@ -136,7 +136,7 @@ class BaseScraper(ABC):
         Rotates proxy per context. Retries up to 3 times on tunnel failures.
         """
         last_exc = None
-        for attempt in range(3):
+        for attempt in range(5):
             proxy = self.proxy_manager.get_proxy()
             context = await self._new_context_with_proxy(proxy)
             page = await context.new_page()
