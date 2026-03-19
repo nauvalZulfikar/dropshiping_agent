@@ -129,7 +129,7 @@ class BaseScraper(ABC):
             pass
 
         try:
-            await page.goto(url, wait_until=wait_until, timeout=30_000)
+            await page.goto(url, wait_until=wait_until, timeout=60_000)
         except Exception as exc:
             logger.warning(f"Navigation to {url} failed: {exc}")
             await page.close()
