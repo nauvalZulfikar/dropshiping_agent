@@ -74,6 +74,7 @@ class BaseScraper(ABC):
                     "--no-sandbox",
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
+                    "--disable-http2",
                 ],
             }
             proxy = self.proxy_manager.get_proxy()
