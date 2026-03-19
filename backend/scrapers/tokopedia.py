@@ -1,16 +1,15 @@
 """
-Tokopedia scraper.
-Rate limit: max 1 req / 3s per proxy. Rotate proxy every 10 requests.
-Sold count format: "1,2rb terjual" → 1200
-Price format: "Rp15.000" → 15000
+Tokopedia scraper — uses GraphQL API via httpx (no browser needed).
+Falls back to Playwright only for product detail pages.
 """
 import asyncio
-import logging
 import re
+import random
 from typing import Optional
 from urllib.parse import quote
 
 import asyncpg
+import httpx
 
 from scrapers.base_scraper import BaseScraper
 from utils.currency import parse_idr_string, parse_sold_count
@@ -18,212 +17,149 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MIN_DELAY = 3.0  # seconds between requests (rate limit)
-_ROTATE_EVERY = 10  # rotate proxy after N requests
+_GQL_URL = "https://gql.tokopedia.com/"
+_MIN_DELAY = 2.0
 
 
 class TokopediaScraper(BaseScraper):
-    """Scrapes search results and product details from Tokopedia."""
+    """Scrapes Tokopedia via GraphQL API — fast, no browser overhead."""
 
-    SEARCH_URL = "https://www.tokopedia.com/search?st=product&q={keyword}&navsource=home&srp_component_id=02.01.00.00&page={page}"
+    SEARCH_URL = "https://www.tokopedia.com/search?st=product&q={keyword}&page={page}"
 
     def __init__(self):
         super().__init__()
-        self._request_count = 0
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
 
     async def scrape_search(self, keyword: str, max_pages: int = 3) -> list[dict]:
-        """
-        Scrape search results for a keyword across max_pages pages.
-        Returns list of product dicts ready for DB insertion.
-        """
         results: list[dict] = []
         for page_num in range(1, max_pages + 1):
-            url = self.SEARCH_URL.format(keyword=quote(keyword), page=page_num)
-            logger.info(f"[Tokopedia] Scraping page {page_num}: {url}")
-
             try:
-                page_results = await self._scrape_search_page(url)
-                results.extend(page_results)
-                logger.info(f"[Tokopedia] Page {page_num}: {len(page_results)} products")
-                await asyncio.sleep(_MIN_DELAY)
+                products = await self._gql_search(keyword, page_num)
+                results.extend(products)
+                logger.info(f"[Tokopedia] Page {page_num}: {len(products)} products")
+                if not products:
+                    break
+                await asyncio.sleep(random.uniform(_MIN_DELAY, _MIN_DELAY + 2))
             except Exception as exc:
                 logger.error(f"[Tokopedia] Page {page_num} failed: {exc}")
                 break
-
-        await self.close()
         return results
 
     async def scrape_product(self, url: str) -> dict:
-        """Scrape full product detail page. Returns product dict."""
+        """Fallback to Playwright for product detail."""
         page = await self._get_page(url, wait_until="domcontentloaded")
         try:
-            await self._random_delay(2.0, 4.0)
-            content = await page.content()
-            if self._detect_captcha(content):
-                raise RuntimeError("CAPTCHA detected on Tokopedia product page")
-
             return await self._extract_product_detail(page, url)
         finally:
             await page.context.close()
 
-    # ------------------------------------------------------------------
-    # Search page extraction
-    # ------------------------------------------------------------------
+    async def _gql_search(self, keyword: str, page: int) -> list[dict]:
+        """Query Tokopedia SearchProductV5 GraphQL endpoint."""
+        proxy = self.proxy_manager.get_proxy()
+        proxy_url = None
+        if proxy:
+            proxy_url = f"http://{proxy['user']}:{proxy['password']}@{proxy['host']}:{proxy['port']}"
 
-    async def _scrape_search_page(self, url: str) -> list[dict]:
-        page = await self._get_page(url, wait_until="domcontentloaded")
+        headers = {
+            "User-Agent": random.choice(self.USER_AGENTS),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Referer": f"https://www.tokopedia.com/search?q={quote(keyword)}",
+            "Origin": "https://www.tokopedia.com",
+            "X-Source": "tokopedia-lite",
+            "X-Tkpd-Lite-Service": "zeus",
+        }
+
+        payload = [{
+            "operationName": "SearchProductQueryV4",
+            "variables": {
+                "params": f"device=desktop&navsource=home&ob=23&page={page}&q={quote(keyword)}&related=true&rows=60&safe_search=false&scheme=https&source=search&srp_component_id=02.01.00.00&srp_page_id=&srp_page_title=&st=product&topads_bucket=true&unique_id=1&user_addressId=&user_cityId=176&user_districtId=2274&user_id=&user_lat=&user_long=&user_postCode=&user_warehouseId=&warehouses="
+            },
+            "query": """fragment ProductV4 on searchProductV4Product {
+  id name url imageUrl price discountPercentage ratingAverage labelGroups { position title type url }
+  shop { id name city url }
+  badge { title imageUrl show }
+  stats { reviewCount }
+  labelGroupVariant { title type hex typeVariant }
+}
+query SearchProductQueryV4($params: String) {
+  searchProductV4(params: $params) {
+    data { products { ...ProductV4 } }
+  }
+}"""
+        }]
+
         try:
-            await self._random_delay(_MIN_DELAY, _MIN_DELAY + 1.5)
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                timeout=30.0,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.post(_GQL_URL, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
 
-            content = await page.content()
-            if self._detect_captcha(content):
-                logger.warning("[Tokopedia] CAPTCHA detected on search page")
-                return []
+            products_raw = (
+                data[0].get("data", {})
+                .get("searchProductV4", {})
+                .get("data", {})
+                .get("products", [])
+            )
+            return [self._parse_gql_product(p) for p in products_raw if p.get("name")]
 
-            # Wait for product cards to render
-            try:
-                await page.wait_for_selector('[data-testid="master-product-card"]', timeout=15_000)
-            except Exception:
-                # Fallback selector
-                await page.wait_for_selector(".css-bk6tzz", timeout=10_000)
-
-            self._request_count += 1
-            return await self._extract_search_cards(page)
-        finally:
-            await page.context.close()
-
-    async def _extract_search_cards(self, page) -> list[dict]:
-        """Extract all product cards from a search result page."""
-        cards = await page.query_selector_all('[data-testid="master-product-card"]')
-        if not cards:
-            # Fallback: try generic card selectors
-            cards = await page.query_selector_all(".css-bk6tzz")
-
-        products = []
-        for card in cards:
-            try:
-                product = await self._parse_card(card)
-                if product:
-                    products.append(product)
-            except Exception as exc:
-                logger.debug(f"[Tokopedia] Card parse error: {exc}")
-
-        return products
-
-    async def _parse_card(self, card) -> Optional[dict]:
-        """Parse a single product card element into a dict."""
-        try:
-            # Title
-            title_el = await card.query_selector('[data-testid="spnSRPProdName"]')
-            title = (await title_el.text_content()).strip() if title_el else ""
-            if not title:
-                return None
-
-            # Price
-            price_el = await card.query_selector('[data-testid="spnSRPProdPrice"]')
-            price_raw = (await price_el.text_content()).strip() if price_el else "0"
-            price_idr = parse_idr_string(price_raw)
-
-            # Shop info
-            shop_el = await card.query_selector('[data-testid="spnSRPProdTabName"]')
-            seller_name = (await shop_el.text_content()).strip() if shop_el else ""
-
-            location_el = await card.query_selector('[data-testid="spnSRPProdTabArea"]')
-            seller_city = (await location_el.text_content()).strip() if location_el else ""
-
-            # Rating & review
-            rating_el = await card.query_selector('[data-testid="spnSRPProdRating"]')
-            rating_raw = (await rating_el.text_content()).strip() if rating_el else ""
-            rating = _parse_rating(rating_raw)
-
-            review_el = await card.query_selector('[data-testid="spnSRPProdReviewTotal"]')
-            review_raw = (await review_el.text_content()).strip() if review_el else "0"
-            review_count = _parse_review_count(review_raw)
-
-            # Sold count
-            sold_el = await card.query_selector('[data-testid="spnSRPProdSold"]')
-            sold_raw = (await sold_el.text_content()).strip() if sold_el else "0"
-            sold_30d = parse_sold_count(sold_raw)
-
-            # Image
-            img_el = await card.query_selector("img")
-            image_url = await img_el.get_attribute("src") if img_el else ""
-
-            # Product URL
-            link_el = await card.query_selector("a")
-            product_url = await link_el.get_attribute("href") if link_el else ""
-            if product_url and product_url.startswith("/"):
-                product_url = f"https://www.tokopedia.com{product_url}"
-
-            # Badge (official store, star seller, etc.)
-            badge_el = await card.query_selector('[data-testid="spnSRPProdBadge"]')
-            badge = (await badge_el.text_content()).strip() if badge_el else ""
-
-            return {
-                "platform": "tokopedia",
-                "title": title,
-                "price_idr": price_idr,
-                "seller_name": seller_name,
-                "seller_city": seller_city,
-                "rating": rating,
-                "review_count": review_count,
-                "sold_30d": sold_30d,
-                "sold_count": sold_30d,
-                "image_url": image_url,
-                "url": product_url,
-                "seller_badge": badge,
-            }
         except Exception as exc:
-            logger.debug(f"[Tokopedia] Card parse exception: {exc}")
-            return None
+            logger.error(f"[Tokopedia] GQL error: {exc}")
+            return []
 
-    # ------------------------------------------------------------------
-    # Product detail extraction
-    # ------------------------------------------------------------------
+    def _parse_gql_product(self, p: dict) -> dict:
+        price_idr = parse_idr_string(p.get("price", "0"))
+        sold_raw = ""
+        for label in p.get("labelGroups", []):
+            if label.get("position") == "integrity":
+                sold_raw = label.get("title", "")
+                break
+        sold_30d = parse_sold_count(sold_raw)
+
+        try:
+            rating = float(p.get("ratingAverage", 0) or 0)
+            rating = rating if 0 < rating <= 5 else None
+        except (ValueError, TypeError):
+            rating = None
+
+        shop = p.get("shop", {})
+        stats = p.get("stats", {})
+
+        return {
+            "platform": "tokopedia",
+            "platform_product_id": str(p.get("id", "")),
+            "title": p.get("name", ""),
+            "url": p.get("url", ""),
+            "image_url": p.get("imageUrl", ""),
+            "price_idr": price_idr,
+            "sold_count": sold_30d,
+            "sold_30d": sold_30d,
+            "review_count": stats.get("reviewCount", 0) or 0,
+            "rating": rating,
+            "seller_name": shop.get("name", ""),
+            "seller_city": shop.get("city", ""),
+            "seller_badge": "",
+        }
 
     async def _extract_product_detail(self, page, url: str) -> dict:
-        """Extract full product detail from a product page."""
         title = await self._safe_text(page, 'h1[data-testid="lblPDPDetailProductName"]')
         if not title:
             title = await self._safe_text(page, "h1")
-
         price_raw = await self._safe_text(page, '[data-testid="lblPDPDetailProductPrice"]')
         price_idr = parse_idr_string(price_raw)
-
-        # Sold count — total (not 30d, but best we can get from detail page)
         sold_raw = await self._safe_text(page, '[data-testid="lblPDPDetailProductSoldCounter"]')
         sold_count = parse_sold_count(sold_raw)
-
         rating_raw = await self._safe_text(page, '[data-testid="lblPDPDetailProductRatingNumber"]')
         rating = _parse_rating(rating_raw)
-
         review_raw = await self._safe_text(page, '[data-testid="btnSeeAllReview"]')
         review_count = _parse_review_count(review_raw)
-
         seller_name = await self._safe_text(page, '[data-testid="llbPDPFooterShopName"]')
         seller_city = await self._safe_text(page, '[data-testid="llbPDPFooterShopLocation"]')
-
-        # Stock
-        stock_raw = await self._safe_text(page, '[data-testid="lblPDPStockValueLimit"]')
-        stock = _parse_integer(stock_raw)
-
-        # Description
-        desc = await self._safe_text(page, '[data-testid="lblPDPDescriptionProduk"]')
-
-        # Image
         img_url = await self._safe_attr(page, '[data-testid="PDPMainImage"] img', "src")
-
-        # Category breadcrumb
-        breadcrumb_els = await page.query_selector_all('[data-testid="btnPDPShopBreadcrumb"] a')
-        breadcrumb = " > ".join([(await el.text_content() or "").strip() for el in breadcrumb_els])
-
-        # Platform product ID from URL
         platform_product_id = _extract_tokopedia_product_id(url)
-
         return {
             "platform": "tokopedia",
             "platform_product_id": platform_product_id,
@@ -237,22 +173,14 @@ class TokopediaScraper(BaseScraper):
             "rating": rating,
             "seller_name": seller_name,
             "seller_city": seller_city,
-            "stock": stock,
-            "description": desc,
-            "category_breadcrumb": breadcrumb,
         }
 
 
 # ------------------------------------------------------------------
-# DB persistence helper (called from Celery tasks)
+# DB persistence
 # ------------------------------------------------------------------
 
 async def save_listings_to_db(db_url: str, listings: list[dict], job_id: str | None = None) -> int:
-    """
-    Upsert scraped Tokopedia listings into product_listings table.
-    Uses deduplicator to find/create canonical product rows.
-    Returns count of rows inserted/updated.
-    """
     if not listings:
         return 0
 
@@ -265,17 +193,11 @@ async def save_listings_to_db(db_url: str, listings: list[dict], job_id: str | N
             try:
                 if not item.get("title"):
                     continue
-
-                # Dedup: find or create canonical product
                 product_id = await find_or_create_canonical_product_simple(
-                    conn,
-                    item["title"],
-                    item.get("image_url"),
+                    conn, item["title"], item.get("image_url"),
                 )
                 if not product_id:
                     continue
-
-                # Upsert the platform listing
                 await conn.execute("""
                     INSERT INTO product_listings (
                         product_id, platform, platform_product_id,
@@ -312,14 +234,13 @@ async def save_listings_to_db(db_url: str, listings: list[dict], job_id: str | N
                 saved += 1
             except Exception as exc:
                 logger.warning(f"[Tokopedia] DB save error for '{item.get('title', '')[:40]}': {exc}")
-
         return saved
     finally:
         await conn.close()
 
 
 # ------------------------------------------------------------------
-# Parsing helpers
+# Helpers
 # ------------------------------------------------------------------
 
 def _parse_rating(raw: str) -> Optional[float]:
@@ -339,15 +260,6 @@ def _parse_review_count(raw: str) -> int:
         return 0
 
 
-def _parse_integer(raw: str) -> Optional[int]:
-    try:
-        clean = re.sub(r"[^\d]", "", raw)
-        return int(clean) if clean else None
-    except (ValueError, TypeError):
-        return None
-
-
 def _extract_tokopedia_product_id(url: str) -> Optional[str]:
-    """Extract product ID from Tokopedia URL."""
     match = re.search(r"/(\d+)(?:\?|$)", url)
     return match.group(1) if match else None
