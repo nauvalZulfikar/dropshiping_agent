@@ -73,20 +73,9 @@ class TokopediaScraper(BaseScraper):
         payload = [{
             "operationName": "SearchProductQueryV4",
             "variables": {
-                "params": f"device=desktop&navsource=home&ob=23&page={page}&q={quote(keyword)}&related=true&rows=60&safe_search=false&scheme=https&source=search&srp_component_id=02.01.00.00&srp_page_id=&srp_page_title=&st=product&topads_bucket=true&unique_id=1&user_addressId=&user_cityId=176&user_districtId=2274&user_id=&user_lat=&user_long=&user_postCode=&user_warehouseId=&warehouses="
+                "params": f"device=desktop&navsource=home&ob=23&page={page}&q={quote(keyword)}&related=true&rows=60&safe_search=false&scheme=https&source=search&srp_component_id=02.01.00.00&st=product&topads_bucket=true"
             },
-            "query": """fragment ProductV4 on searchProductV4Product {
-  id name url imageUrl price discountPercentage ratingAverage labelGroups { position title type url }
-  shop { id name city url }
-  badge { title imageUrl show }
-  stats { reviewCount }
-  labelGroupVariant { title type hex typeVariant }
-}
-query SearchProductQueryV4($params: String) {
-  searchProductV4(params: $params) {
-    data { products { ...ProductV4 } }
-  }
-}"""
+            "query": "query SearchProductQueryV4($params: String) { searchProductV4(params: $params) { data { products { id name url imageUrl price ratingAverage labelGroups { position title } shop { id name city } stats { reviewCount } } } } }"
         }]
 
         try:
