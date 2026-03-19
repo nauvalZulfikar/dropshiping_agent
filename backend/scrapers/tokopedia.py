@@ -79,11 +79,10 @@ class TokopediaScraper(BaseScraper):
         }]
 
         try:
-            async with httpx.AsyncClient(
-                mounts=mounts,
-                timeout=30.0,
-                follow_redirects=True,
-            ) as client:
+            client_kwargs = {"timeout": 30.0, "follow_redirects": True}
+            if mounts:
+                client_kwargs["mounts"] = mounts
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 resp = await client.post(_GQL_URL, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
