@@ -82,10 +82,12 @@ class AliExpressScraper(BaseScraper):
     async def _scrape_search_page(self, url: str, rate: float, max_results: int) -> list[dict]:
         page = await self._get_page(url, wait_until="domcontentloaded")
         try:
-            await self._random_delay(2.0, 5.0)
+            # Human-like scroll to trigger lazy-load rendering
+            await self._random_delay(3.0, 5.0)
+            await self._human_scroll(page)
+            await self._random_delay(2.0, 3.0)
 
-            # Only treat as CAPTCHA if no product cards found AND captcha indicators present
-            # AliExpress embeds "captcha" in JS even on normal pages — check cards first
+            # Check for product cards after scroll
             try:
                 await page.wait_for_selector(".search-item-card-wrapper-gallery", timeout=8_000)
                 has_cards = True
@@ -94,7 +96,8 @@ class AliExpressScraper(BaseScraper):
 
             if not has_cards:
                 content = await page.content()
-                if self._detect_captcha(content):
+                # Only raise if actual CAPTCHA challenge — AliExpress JS contains "captcha" string normally
+                if "slide to verify" in content.lower() or "verify your identity" in content.lower():
                     await page.context.close()
                     raise CaptchaError("CAPTCHA on search page")
 
