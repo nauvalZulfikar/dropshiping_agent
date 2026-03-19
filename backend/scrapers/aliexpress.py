@@ -6,7 +6,6 @@ CAPTCHA detection: marks proxy as blocked, switches proxy, retries.
 """
 import asyncio
 import json
-import logging
 import re
 from typing import Optional
 from urllib.parse import quote
@@ -14,7 +13,7 @@ from urllib.parse import quote
 import asyncpg
 
 from scrapers.base_scraper import BaseScraper
-from utils.currency import usd_to_idr, fetch_usd_to_idr_rate, parse_idr_string
+from utils.currency import usd_to_idr, fetch_usd_to_idr_rate
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +24,7 @@ _MAX_CAPTCHA_RETRIES = 3
 class AliExpressScraper(BaseScraper):
     """Scrapes AliExpress search results and saves to suppliers table."""
 
-    SEARCH_URL = "https://www.aliexpress.com/wholesale?SearchText={keyword}&SortType=total_tranpro_desc"
+    SEARCH_URL = "https://www.aliexpress.com/w/wholesale-{keyword}.html"
 
     # ------------------------------------------------------------------
     # Public interface
@@ -36,7 +35,8 @@ class AliExpressScraper(BaseScraper):
         Scrape AliExpress wholesale search for supplier products.
         Returns list of supplier dicts.
         """
-        url = self.SEARCH_URL.format(keyword=quote(keyword))
+        slug = keyword.strip().replace(" ", "-")
+        url = self.SEARCH_URL.format(keyword=quote(slug, safe="-"))
         logger.info(f"[AliExpress] Scraping: {url}")
 
         # Fetch live exchange rate once
@@ -131,7 +131,7 @@ class AliExpressScraper(BaseScraper):
     async def _extract_dom(self, page, rate: float) -> list[dict]:
         """DOM-based fallback extraction for AliExpress search cards."""
         try:
-            await page.wait_for_selector(".search-item-card-wrapper-gallery", timeout=10_000)
+            await page.wait_for_selector(".search-item-card-wrapper-gallery", timeout=15_000)
         except Exception:
             return []
 
@@ -147,36 +147,45 @@ class AliExpressScraper(BaseScraper):
         return results
 
     async def _parse_card_dom(self, card, rate: float) -> Optional[dict]:
-        title_el = await card.query_selector(".multi--titleText--nXeOvyr")
-        title = (await title_el.text_content()).strip() if title_el else ""
+        # Title — prefer aria-label on the heading div (most reliable)
+        title_el = await card.query_selector("div.lw_an[title]")
+        if title_el:
+            title = (await title_el.get_attribute("title") or "").strip()
+        else:
+            h3_el = await card.query_selector("h3")
+            title = (await h3_el.text_content()).strip() if h3_el else ""
         if not title:
             return None
 
-        price_el = await card.query_selector(".multi--price-sale--U-S0jtj")
-        price_raw = (await price_el.text_content()).strip() if price_el else "0"
-        price_usd = _parse_usd(price_raw)
-        price_idr = usd_to_idr(price_usd, rate)
+        # Price — already in IDR when proxy is Indonesia; use aria-label for clean value
+        price_el = await card.query_selector("div[aria-label^='Rp']")
+        price_raw = (await price_el.get_attribute("aria-label") or "0") if price_el else "0"
+        price_idr = _parse_idr(price_raw)
+        # Fallback: if price not found as IDR, try old USD selectors and convert
+        if not price_idr:
+            price_usd_el = await card.query_selector(".multi--price-sale--U-S0jtj")
+            price_usd_raw = (await price_usd_el.text_content()).strip() if price_usd_el else "0"
+            price_usd = _parse_usd(price_usd_raw)
+            price_idr = usd_to_idr(price_usd, rate) if price_usd else 0
 
-        shipping_el = await card.query_selector(".multi--price-ship--3rMOEb")
-        shipping_raw = (await shipping_el.text_content()).strip() if shipping_el else ""
-        shipping_usd = _parse_usd(shipping_raw) if shipping_raw and "free" not in shipping_raw.lower() else 0.0
-        shipping_idr = usd_to_idr(shipping_usd, rate)
-
-        rating_el = await card.query_selector(".multi--reviews--3zmFt6N span")
+        # Rating & reviews
+        rating_el = await card.query_selector("[class*=rate]")
         rating_raw = (await rating_el.text_content()).strip() if rating_el else ""
         rating = _parse_float(rating_raw)
 
-        review_el = await card.query_selector(".multi--reviews--3zmFt6N")
+        review_el = await card.query_selector("[class*=sold], [class*=review]")
         review_raw = (await review_el.text_content()).strip() if review_el else ""
-        review_count = _parse_int_from_parentheses(review_raw)
+        review_count = _parse_int_first(review_raw) or 0
 
-        seller_el = await card.query_selector(".multi--store--2ERkHS")
-        seller_name = (await seller_el.text_content()).strip() if seller_el else ""
-
+        # Image & link
         img_el = await card.query_selector("img")
         image_url = await img_el.get_attribute("src") if img_el else ""
+        if image_url and image_url.startswith("//"):
+            image_url = f"https:{image_url}"
 
-        link_el = await card.query_selector("a")
+        link_el = await card.query_selector("a.search-card-item")
+        if not link_el:
+            link_el = await card.query_selector("a")
         product_url = await link_el.get_attribute("href") if link_el else ""
         if product_url and not product_url.startswith("http"):
             product_url = f"https:{product_url}"
@@ -186,11 +195,11 @@ class AliExpressScraper(BaseScraper):
             "title": title,
             "url": product_url,
             "image_url": image_url,
-            "price_usd": price_usd,
+            "price_usd": 0.0,
             "price_idr": price_idr,
-            "shipping_cost_idr": shipping_idr,
+            "shipping_cost_idr": 0,
             "moq": 1,
-            "seller_name": seller_name,
+            "seller_name": "",
             "rating": rating,
             "review_count": review_count,
         }
@@ -348,6 +357,15 @@ class CaptchaError(RuntimeError):
 # ------------------------------------------------------------------
 # Parsing helpers
 # ------------------------------------------------------------------
+
+def _parse_idr(raw: str) -> int:
+    """Parse IDR string like 'Rp78,445' → 78445."""
+    try:
+        clean = re.sub(r"[^\d]", "", raw)
+        return int(clean) if clean else 0
+    except (ValueError, TypeError):
+        return 0
+
 
 def _parse_usd(raw: str) -> float:
     try:
