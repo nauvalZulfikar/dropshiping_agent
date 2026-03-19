@@ -98,6 +98,11 @@ query SearchProductQueryV4($params: String) {
                 resp = await client.post(_GQL_URL, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
+                logger.info(f"[Tokopedia] GQL status={resp.status_code} response_preview={str(data)[:300]}")
+
+            if not data or not isinstance(data, list) or data[0] is None:
+                logger.error(f"[Tokopedia] GQL unexpected response: {data}")
+                return []
 
             products_raw = (
                 data[0].get("data", {})
