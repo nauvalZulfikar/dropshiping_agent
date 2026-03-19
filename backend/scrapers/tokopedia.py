@@ -18,6 +18,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _GQL_URL = "https://gql.tokopedia.com/"
+_SEARCH_API = "https://ace.tokopedia.com/search/v4.6/product"
 _MIN_DELAY = 2.0
 
 
@@ -53,75 +54,59 @@ class TokopediaScraper(BaseScraper):
             await page.context.close()
 
     async def _gql_search(self, keyword: str, page: int) -> list[dict]:
-        """Query Tokopedia SearchProductV5 GraphQL endpoint."""
+        """Query Tokopedia ACE search API via httpx."""
         proxy = self.proxy_manager.get_proxy()
-        mounts = None
+        proxy_url = None
         if proxy:
             proxy_url = f"http://{proxy['user']}:{proxy['password']}@{proxy['host']}:{proxy['port']}"
-            mounts = {"https://": httpx.AsyncHTTPTransport(proxy=proxy_url)}
 
         headers = {
             "User-Agent": random.choice(self.USER_AGENTS),
-            "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "id-ID,id;q=0.9",
             "Referer": f"https://www.tokopedia.com/search?q={quote(keyword)}",
             "Origin": "https://www.tokopedia.com",
-            "X-Source": "tokopedia-lite",
-            "X-Tkpd-Lite-Service": "zeus",
         }
 
-        payload = [{
-            "operationName": "SearchProductQueryV4",
-            "variables": {
-                "params": f"device=desktop&navsource=home&ob=23&page={page}&q={quote(keyword)}&related=true&rows=60&safe_search=false&scheme=https&source=search&srp_component_id=02.01.00.00&st=product&topads_bucket=true"
-            },
-            "query": "query SearchProductQueryV4($params: String) { searchProductV4(params: $params) { data { products { id name url imageUrl price ratingAverage labelGroups { position title } shop { id name city } stats { reviewCount } } } } }"
-        }]
+        params = {
+            "q": keyword,
+            "ob": "23",
+            "page": str(page),
+            "rows": "60",
+            "source": "search",
+            "device": "desktop",
+            "related": "true",
+            "st": "product",
+            "safe_search": "false",
+        }
 
         try:
             client_kwargs = {"timeout": 30.0, "follow_redirects": True}
-            if mounts:
-                client_kwargs["mounts"] = mounts
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
             async with httpx.AsyncClient(**client_kwargs) as client:
-                resp = await client.post(_GQL_URL, json=payload, headers=headers)
+                resp = await client.get(_SEARCH_API, params=params, headers=headers)
+                logger.info(f"[Tokopedia] ACE status={resp.status_code}")
                 resp.raise_for_status()
                 data = resp.json()
-                logger.info(f"[Tokopedia] GQL status={resp.status_code} response_preview={str(data)[:300]}")
 
-            if not data or not isinstance(data, list) or data[0] is None:
-                logger.error(f"[Tokopedia] GQL unexpected response: {data}")
-                return []
-
-            products_raw = (
-                data[0].get("data", {})
-                .get("searchProductV4", {})
-                .get("data", {})
-                .get("products", [])
-            )
-            return [self._parse_gql_product(p) for p in products_raw if p.get("name")]
+            products_raw = data.get("data", []) or []
+            return [self._parse_ace_product(p) for p in products_raw if p.get("name")]
 
         except Exception as exc:
-            logger.error(f"[Tokopedia] GQL error: {exc}")
+            logger.error(f"[Tokopedia] ACE error: {exc}")
             return []
 
-    def _parse_gql_product(self, p: dict) -> dict:
-        price_idr = parse_idr_string(p.get("price", "0"))
-        sold_raw = ""
-        for label in p.get("labelGroups", []):
-            if label.get("position") == "integrity":
-                sold_raw = label.get("title", "")
-                break
-        sold_30d = parse_sold_count(sold_raw)
-
+    def _parse_ace_product(self, p: dict) -> dict:
+        price_idr = int(p.get("price", 0) or 0)
+        sold_raw = p.get("sold", "") or p.get("countReview", "") or ""
+        sold_30d = parse_sold_count(str(sold_raw))
         try:
             rating = float(p.get("ratingAverage", 0) or 0)
             rating = rating if 0 < rating <= 5 else None
         except (ValueError, TypeError):
             rating = None
-
-        shop = p.get("shop", {})
-        stats = p.get("stats", {})
-
+        shop = p.get("shop", {}) or {}
         return {
             "platform": "tokopedia",
             "platform_product_id": str(p.get("id", "")),
@@ -131,7 +116,7 @@ class TokopediaScraper(BaseScraper):
             "price_idr": price_idr,
             "sold_count": sold_30d,
             "sold_30d": sold_30d,
-            "review_count": stats.get("reviewCount", 0) or 0,
+            "review_count": int(p.get("countReview", 0) or 0),
             "rating": rating,
             "seller_name": shop.get("name", ""),
             "seller_city": shop.get("city", ""),
