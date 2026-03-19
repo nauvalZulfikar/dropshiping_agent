@@ -77,15 +77,31 @@ class BaseScraper(ABC):
                     "--disable-http2",
                 ],
             }
-            proxy = self.proxy_manager.get_proxy()
-            if proxy:
-                launch_kwargs["proxy"] = {
-                    "server": f"http://{proxy['host']}:{proxy['port']}",
-                    "username": proxy.get("user", ""),
-                    "password": proxy.get("password", ""),
-                }
             self._browser = await self._playwright.chromium.launch(**launch_kwargs)
-        return self._browser
+
+    async def _new_context_with_proxy(self) -> "BrowserContext":
+        """Create context with proxy auth at context level (fixes 407 on HTTPS tunnels)."""
+        browser = await self._get_browser()
+        proxy = self.proxy_manager.get_proxy()
+        ua = random.choice(self.USER_AGENTS)
+        vp = random.choice(self.VIEWPORT_SIZES)
+
+        context_kwargs = {
+            "user_agent": ua,
+            "viewport": vp,
+            "locale": "id-ID",
+            "timezone_id": "Asia/Jakarta",
+            "extra_http_headers": {
+                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            },
+        }
+        if proxy:
+            context_kwargs["proxy"] = {
+                "server": f"http://{proxy['host']}:{proxy['port']}",
+                "username": proxy.get("user", ""),
+                "password": proxy.get("password", ""),
+            }
+        return await browser.new_context(**context_kwargs)
 
     async def _new_context(self) -> BrowserContext:
         browser = await self._get_browser()
@@ -118,7 +134,7 @@ class BaseScraper(ABC):
         Open a new page, navigate to URL, apply stealth.
         Rotates proxy per context. Uses random UA + viewport.
         """
-        context = await self._new_context()
+        context = await self._new_context_with_proxy()
         page = await context.new_page()
 
         # Apply stealth to the actual page
