@@ -55,9 +55,10 @@ class TokopediaScraper(BaseScraper):
     async def _gql_search(self, keyword: str, page: int) -> list[dict]:
         """Query Tokopedia SearchProductV5 GraphQL endpoint."""
         proxy = self.proxy_manager.get_proxy()
-        proxy_url = None
+        mounts = None
         if proxy:
             proxy_url = f"http://{proxy['user']}:{proxy['password']}@{proxy['host']}:{proxy['port']}"
+            mounts = {"https://": httpx.AsyncHTTPTransport(proxy=proxy_url)}
 
         headers = {
             "User-Agent": random.choice(self.USER_AGENTS),
@@ -90,7 +91,7 @@ query SearchProductQueryV4($params: String) {
 
         try:
             async with httpx.AsyncClient(
-                proxy=proxy_url,
+                mounts=mounts,
                 timeout=30.0,
                 follow_redirects=True,
             ) as client:
