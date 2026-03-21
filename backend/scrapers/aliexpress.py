@@ -171,41 +171,30 @@ class AliExpressScraper(BaseScraper):
         if not title:
             return None
 
-        # Price — try IDR first (Indonesia proxy), then USD fallback
+        # Price — parse from raw HTML (AliExpress price not in predictable CSS class)
         price_idr = 0
         price_usd = 0.0
-        for sel in ["[class*='price']", "[class*='Price']"]:
-            price_el = await card.query_selector(sel)
-            if price_el:
-                price_raw = (await price_el.text_content() or "").strip()
-                if "Rp" in price_raw:
-                    price_idr = _parse_idr(price_raw)
-                    break
-                else:
-                    price_usd = _parse_usd(price_raw)
-                    if price_usd:
-                        price_idr = usd_to_idr(price_usd, rate)
-                        break
+        html = await card.inner_html()
+        rp_prices = re.findall(r"Rp\s*[\d,.]+", html)
+        if rp_prices:
+            price_idr = _parse_idr(rp_prices[0])
+        else:
+            usd_prices = re.findall(r"US\$\s*[\d,.]+", html)
+            if usd_prices:
+                price_usd = _parse_usd(usd_prices[0])
+                price_idr = usd_to_idr(price_usd, rate)
 
-        # Rating
+        # Rating — look for decimal like "4.8" near star/rating context
         rating = None
-        for sel in ["[class*='rating']", "[class*='star']", "[class*='rate']"]:
-            rating_el = await card.query_selector(sel)
-            if rating_el:
-                rating_raw = (await rating_el.text_content() or "").strip()
-                rating = _parse_float(rating_raw)
-                if rating:
-                    break
+        rating_matches = re.findall(r"\b([4-5]\.\d)\b", html)
+        if rating_matches:
+            rating = float(rating_matches[0])
 
-        # Review/sold count
+        # Sold count — look for patterns like "500+ sold" or "1000 sold"
         review_count = 0
-        for sel in ["[class*='sold']", "[class*='review']", "[class*='trade']"]:
-            review_el = await card.query_selector(sel)
-            if review_el:
-                review_raw = (await review_el.text_content() or "").strip()
-                review_count = _parse_int_first(review_raw) or 0
-                if review_count:
-                    break
+        sold_matches = re.findall(r"([\d,]+)\+?\s*(?:sold|terjual|orders?)", html, re.IGNORECASE)
+        if sold_matches:
+            review_count = _parse_int_first(sold_matches[0]) or 0
 
         # Image
         img_el = await card.query_selector("img")
