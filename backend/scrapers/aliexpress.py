@@ -154,55 +154,74 @@ class AliExpressScraper(BaseScraper):
         return results
 
     async def _parse_card_dom(self, card, rate: float) -> Optional[dict]:
-        # Title — prefer aria-label on the heading div (most reliable)
-        title_el = await card.query_selector("div.lw_an[title]")
-        if title_el:
-            title = (await title_el.get_attribute("title") or "").strip()
-        else:
-            h3_el = await card.query_selector("h3")
-            title = (await h3_el.text_content()).strip() if h3_el else ""
-        if not title:
-            return None
-
-        # Price — already in IDR when proxy is Indonesia; use aria-label for clean value
-        price_el = await card.query_selector("div[aria-label^='Rp']")
-        price_raw = (await price_el.get_attribute("aria-label") or "0") if price_el else "0"
-        price_idr = _parse_idr(price_raw)
-        # Fallback: if price not found as IDR, try old USD selectors and convert
-        if not price_idr:
-            price_usd_el = await card.query_selector(".multi--price-sale--U-S0jtj")
-            price_usd_raw = (await price_usd_el.text_content()).strip() if price_usd_el else "0"
-            price_usd = _parse_usd(price_usd_raw)
-            price_idr = usd_to_idr(price_usd, rate) if price_usd else 0
-
-        # Rating & reviews
-        rating_el = await card.query_selector("[class*=rate]")
-        rating_raw = (await rating_el.text_content()).strip() if rating_el else ""
-        rating = _parse_float(rating_raw)
-
-        review_el = await card.query_selector("[class*=sold], [class*=review]")
-        review_raw = (await review_el.text_content()).strip() if review_el else ""
-        review_count = _parse_int_first(review_raw) or 0
-
-        # Image & link
-        img_el = await card.query_selector("img")
-        image_url = await img_el.get_attribute("src") if img_el else ""
-        if image_url and image_url.startswith("//"):
-            image_url = f"https:{image_url}"
-
-        link_el = await card.query_selector("a.search-card-item")
+        # Link & product ID (use as dedup key)
+        link_el = await card.query_selector("a[href*='/item/']")
         if not link_el:
             link_el = await card.query_selector("a")
         product_url = await link_el.get_attribute("href") if link_el else ""
         if product_url and not product_url.startswith("http"):
             product_url = f"https:{product_url}"
+        source_product_id = _extract_ae_product_id(product_url)
+
+        # Title
+        title_el = await card.query_selector("h3")
+        if not title_el:
+            title_el = await card.query_selector("[class*='title']")
+        title = (await title_el.text_content()).strip() if title_el else ""
+        if not title:
+            return None
+
+        # Price — try IDR first (Indonesia proxy), then USD fallback
+        price_idr = 0
+        price_usd = 0.0
+        for sel in ["[class*='price']", "[class*='Price']"]:
+            price_el = await card.query_selector(sel)
+            if price_el:
+                price_raw = (await price_el.text_content() or "").strip()
+                if "Rp" in price_raw:
+                    price_idr = _parse_idr(price_raw)
+                    break
+                else:
+                    price_usd = _parse_usd(price_raw)
+                    if price_usd:
+                        price_idr = usd_to_idr(price_usd, rate)
+                        break
+
+        # Rating
+        rating = None
+        for sel in ["[class*='rating']", "[class*='star']", "[class*='rate']"]:
+            rating_el = await card.query_selector(sel)
+            if rating_el:
+                rating_raw = (await rating_el.text_content() or "").strip()
+                rating = _parse_float(rating_raw)
+                if rating:
+                    break
+
+        # Review/sold count
+        review_count = 0
+        for sel in ["[class*='sold']", "[class*='review']", "[class*='trade']"]:
+            review_el = await card.query_selector(sel)
+            if review_el:
+                review_raw = (await review_el.text_content() or "").strip()
+                review_count = _parse_int_first(review_raw) or 0
+                if review_count:
+                    break
+
+        # Image
+        img_el = await card.query_selector("img")
+        image_url = await img_el.get_attribute("src") if img_el else ""
+        if not image_url:
+            image_url = await img_el.get_attribute("data-src") if img_el else ""
+        if image_url and image_url.startswith("//"):
+            image_url = f"https:{image_url}"
 
         return {
             "source": "aliexpress",
+            "source_product_id": source_product_id,
             "title": title,
             "url": product_url,
             "image_url": image_url,
-            "price_usd": 0.0,
+            "price_usd": price_usd,
             "price_idr": price_idr,
             "shipping_cost_idr": 0,
             "moq": 1,
