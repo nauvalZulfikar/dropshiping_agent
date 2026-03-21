@@ -59,8 +59,8 @@ def full_scan(keywords: list[str]):
     tasks = []
     for keyword in keywords:
         tasks.extend([
-            scrape_tokopedia.s(keyword),
-            scrape_shopee.s(keyword),
+            # scrape_tokopedia.s(keyword),  # disabled: proxy tunnel blocked
+            # scrape_shopee.s(keyword),      # disabled: proxy tunnel blocked
             scrape_aliexpress.s(keyword),
         ])
     job = group(tasks)
