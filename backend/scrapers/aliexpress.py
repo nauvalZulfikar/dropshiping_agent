@@ -337,7 +337,11 @@ async def save_suppliers_to_db(db_url: str, suppliers: list[dict], product_id: O
                         seller_name, rating,
                         scraped_at
                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
-                    ON CONFLICT DO NOTHING
+                    ON CONFLICT (source, title) DO UPDATE SET
+                        price_idr = EXCLUDED.price_idr,
+                        price_usd = EXCLUDED.price_usd,
+                        rating = EXCLUDED.rating,
+                        scraped_at = NOW()
                 """,
                 product_id,
                 s.get("source", "aliexpress"),
