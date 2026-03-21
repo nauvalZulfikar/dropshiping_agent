@@ -154,12 +154,13 @@ class AliExpressScraper(BaseScraper):
         return results
 
     async def _parse_card_dom(self, card, rate: float) -> Optional[dict]:
-        # Link & product ID (use as dedup key)
-        link_el = await card.query_selector("a[href*='/item/']")
-        if not link_el:
-            link_el = await card.query_selector("a")
-        product_url = await link_el.get_attribute("href") if link_el else ""
-        if product_url and not product_url.startswith("http"):
+        # Link & product ID — use regex on inner HTML (CSS attr selector with / is invalid in Playwright)
+        html = await card.inner_html()
+        url_matches = re.findall(r'href="(//www\.aliexpress\.com/item/[^"]+)"', html)
+        if not url_matches:
+            url_matches = re.findall(r'href="(https://www\.aliexpress\.com/item/[^"]+)"', html)
+        product_url = url_matches[0] if url_matches else ""
+        if product_url.startswith("//"):
             product_url = f"https:{product_url}"
         source_product_id = _extract_ae_product_id(product_url)
 
@@ -174,7 +175,6 @@ class AliExpressScraper(BaseScraper):
         # Price — parse from raw HTML (AliExpress price not in predictable CSS class)
         price_idr = 0
         price_usd = 0.0
-        html = await card.inner_html()
         rp_prices = re.findall(r"Rp\s*[\d,.]+", html)
         if rp_prices:
             price_idr = _parse_idr(rp_prices[0])
