@@ -58,7 +58,7 @@ async def list_suppliers(
         SELECT
             s.id, s.product_id, s.source, s.title, s.url, s.image_url,
             s.price_idr, s.shipping_cost_idr, s.moq, s.seller_name,
-            s.rating, s.scraped_at,
+            s.rating, s.review_count, s.scraped_at,
             p.canonical_name AS product_name
         FROM suppliers s
         LEFT JOIN products p ON p.id = s.product_id

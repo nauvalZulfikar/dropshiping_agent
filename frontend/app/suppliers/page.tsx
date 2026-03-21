@@ -14,6 +14,7 @@ interface Supplier {
   moq?: number;
   seller_name?: string;
   rating?: number;
+  review_count?: number;
   product_name?: string;
 }
 
@@ -79,7 +80,7 @@ export default function SuppliersPage() {
         <table className="w-full text-sm">
           <thead className="bg-secondary text-muted-foreground">
             <tr>
-              {["Source", "Title / Product", "Price (IDR)", "Shipping", "Total", "MOQ", "Seller", "Rating"].map((h) => (
+              {["Source", "Title / Product", "Price (IDR)", "Shipping", "Sold", "MOQ", "Seller", "Rating"].map((h) => (
                 <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
               ))}
             </tr>
@@ -110,9 +111,7 @@ export default function SuppliersPage() {
                     </td>
                     <td className="px-4 py-3 font-mono">{s.price_idr != null ? Number(s.price_idr).toLocaleString("id-ID") : "—"}</td>
                     <td className="px-4 py-3 font-mono">{s.shipping_cost_idr != null ? Number(s.shipping_cost_idr).toLocaleString("id-ID") : "—"}</td>
-                    <td className="px-4 py-3 font-mono font-semibold">
-                      {s.price_idr != null ? Number(Number(s.price_idr) + Number(s.shipping_cost_idr ?? 0)).toLocaleString("id-ID") : "—"}
-                    </td>
+                    <td className="px-4 py-3 font-mono">{s.review_count ? s.review_count.toLocaleString("id-ID") : "—"}</td>
                     <td className="px-4 py-3">{s.moq ?? 1}</td>
                     <td className="px-4 py-3 text-xs">{s.seller_name ?? "—"}</td>
                     <td className="px-4 py-3">{s.rating != null ? `${Number(s.rating).toFixed(1)}/5` : "—"}</td>

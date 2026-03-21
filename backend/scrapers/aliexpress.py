@@ -154,13 +154,16 @@ class AliExpressScraper(BaseScraper):
         return results
 
     async def _parse_card_dom(self, card, rate: float) -> Optional[dict]:
-        # Link & product ID — match any aliexpress subdomain /item/ URL
+        # Link & product ID — extract product ID from any aliexpress subdomain URL
         html = await card.inner_html()
         url_matches = re.findall(r'href="((?:https?:)?//[a-z]+\.aliexpress\.com/item/[^"?]+)', html)
         product_url = url_matches[0] if url_matches else ""
         if product_url.startswith("//"):
             product_url = f"https:{product_url}"
         source_product_id = _extract_ae_product_id(product_url)
+        # Normalize to www.aliexpress.com to avoid 404 on regional subdomains
+        if source_product_id:
+            product_url = f"https://www.aliexpress.com/item/{source_product_id}.html"
 
         # Title
         title_el = await card.query_selector("h3")
@@ -182,9 +185,9 @@ class AliExpressScraper(BaseScraper):
                 price_usd = _parse_usd(usd_prices[0])
                 price_idr = usd_to_idr(price_usd, rate)
 
-        # Rating — look for decimal like "4.8" near star/rating context
+        # Rating — match 1.0-5.0 range
         rating = None
-        rating_matches = re.findall(r"\b([4-5]\.\d)\b", html)
+        rating_matches = re.findall(r"\b([1-5]\.\d)\b", html)
         if rating_matches:
             rating = float(rating_matches[0])
 
