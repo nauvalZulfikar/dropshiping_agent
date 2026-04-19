@@ -1,0 +1,32 @@
+# Frontend (has its own Dockerfile)
+frontend/node_modules
+frontend/.next
+frontend/.git
+
+# Git
+.git
+.github
+
+# Python caches
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.venv
+venv
+
+# Samples (large binaries)
+samples/*.mp4
+
+# Env (injected at runtime)
+.env.local
+
+# Logs
+*.log
+agent_queue.json
+
+# IDE
+.vscode
+.idea
+.env
+.env.*

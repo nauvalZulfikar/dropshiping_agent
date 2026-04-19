@@ -36,9 +36,9 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-celery_app.autodiscover_tasks([
-    "affiliate",
-    "store",
-    "fulfillment",
-    "ai",
-])
+celery_app.conf.include = [
+    "affiliate.scheduler",
+    "affiliate.niche_scorer",
+    "store.inventory_sync",
+    "store.repricing_bot",
+]
